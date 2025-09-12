@@ -1,446 +1,512 @@
-
 import { render, h } from "preact";
-import { useState, useCallback, useEffect, useRef } from "preact/hooks";
+import { useState, useCallback, useEffect, useRef, useMemo } from "preact/hooks";
 import htm from "htm";
 import { GoogleGenAI, Type } from "@google/genai";
 
 const html = htm.bind(h);
 
+// --- Constants ---
+const FPS = 30;
+const RULER_TICK_INTERVAL_FRAMES = 30; // Show label every 30 frames (1 second)
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 10;
+const FRAME_WIDTH_PX = 20;
+
+
 // --- Timeline Configuration ---
 const timelineTracks = [
-    { id: 'group_bone_move', label: 'Xương Di Chuyển', isGroup: true, icon: 'fa-solid fa-arrows-up-down-left-right' },
-    { id: 'bone_move_head', label: 'Head', parent: 'group_bone_move', icon: 'fa-solid fa-user' },
-    { id: 'bone_move_shoulder', label: 'Shoulder', parent: 'group_bone_move', icon: 'fa-solid fa-diagram-project' },
-    { id: 'bone_move_elbow', label: 'Elbow', parent: 'group_bone_move', icon: 'fa-solid fa-circle' },
-    { id: 'bone_move_knee', label: 'Knee', parent: 'group_bone_move', icon: 'fa-solid fa-circle' },
+    { id: 'group_bone_move', label: 'Xương Di Chuyển', isGroup: true, icon: 'fa-solid fa-arrows-up-down-left-right', type: 'bone' },
+    { id: 'bone_move_head', label: 'Head', parent: 'group_bone_move', icon: 'fa-solid fa-user', type: 'bone' },
+    { id: 'bone_move_shoulder', label: 'Shoulder', parent: 'group_bone_move', icon: 'fa-solid fa-diagram-project', type: 'bone' },
+    { id: 'bone_move_elbow', label: 'Elbow', parent: 'group_bone_move', icon: 'fa-solid fa-circle', type: 'bone' },
+    { id: 'bone_move_knee', label: 'Knee', parent: 'group_bone_move', icon: 'fa-solid fa-shoe-prints', type: 'bone' },
 
-    { id: 'group_bone_rot', label: 'Xương Xoay', isGroup: true, icon: 'fa-solid fa-rotate' },
-    { id: 'bone_rot_head', label: 'Head Rotation', parent: 'group_bone_rot', icon: 'fa-solid fa-user' },
-    { id: 'bone_rot_shoulder', label: 'Shoulder Rotation', parent: 'group_bone_rot', icon: 'fa-solid fa-diagram-project' },
-    
-    { id: 'group_bone_stretch', label: 'Xương Co Giãn', isGroup: true, icon: 'fa-solid fa-arrows-left-right-to-line' },
-    { id: 'bone_stretch_arms', label: 'Arms', parent: 'group_bone_stretch', icon: 'fa-solid fa-hand-fist' },
-    { id: 'bone_stretch_legs', label: 'Legs', parent: 'group_bone_stretch', icon: 'fa-solid fa-shoe-prints' },
+    { id: 'group_bone_rotate', label: 'Xương Xoay', isGroup: true, icon: 'fa-solid fa-rotate', type: 'bone' },
+    { id: 'bone_rotate_head', label: 'Head', parent: 'group_bone_rotate', icon: 'fa-solid fa-user', type: 'bone' },
+    { id: 'bone_rotate_shoulder', label: 'Shoulder', parent: 'group_bone_rotate', icon: 'fa-solid fa-diagram-project', type: 'bone' },
 
-    { id: 'group_camera', label: 'Camera', isGroup: true, icon: 'fa-solid fa-camera-retro' },
-    { id: 'camera_pan', label: 'Di chuyển Camera', parent: 'group_camera', icon: 'fa-solid fa-up-down-left-right' },
-    { id: 'camera_zoom', label: 'Zoom Camera', parent: 'group_camera', icon: 'fa-solid fa-magnifying-glass-plus' },
-    { id: 'camera_rotate', label: 'Xoay Camera', parent: 'group_camera', icon: 'fa-solid fa-camera-rotate' },
-    { id: 'camera_tilt', label: 'Nghiêng Camera', parent: 'group_camera', icon: 'fa-solid fa-compass' },
+    { id: 'group_bone_stretch', label: 'Xương Giãn', isGroup: true, icon: 'fa-solid fa-up-right-and-down-left-from-center', type: 'bone' },
+    { id: 'bone_stretch_head', label: 'Head', parent: 'group_bone_stretch', icon: 'fa-solid fa-user', type: 'bone' },
+    { id: 'bone_stretch_shoulder', label: 'Shoulder', parent: 'group_bone_stretch', icon: 'fa-solid fa-diagram-project', type: 'bone' },
+
+    { id: 'group_camera', label: 'Camera', isGroup: true, icon: 'fa-solid fa-camera', type: 'camera' },
+    { id: 'camera_pan', label: 'Pan', parent: 'group_camera', icon: 'fa-solid fa-arrows-left-right-to-line', type: 'camera' },
+    { id: 'camera_zoom', label: 'Zoom', parent: 'group_camera', icon: 'fa-solid fa-magnifying-glass', type: 'camera' },
+    { id: 'camera_rotate', label: 'Rotate', parent: 'group_camera', icon: 'fa-solid fa-camera-rotate', type: 'camera' },
 ];
 
+const VirtualCameraOverlay = ({ camera, setCamera, appContainerRef }) => {
+    const cameraRef = useRef(null);
+    const resizerRef = useRef(null);
+    const dragInfo = useRef({ isDragging: false, isResizing: false, startX: 0, startY: 0, startW: 0, startH: 0, offsetX: 0, offsetY: 0 });
 
-const App = () => {
-  // Connection State
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
-  
-  // Analysis State
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisProgress, setAnalysisProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState("Sẵn sàng");
-  
-  // UI State
-  const [activeTab, setActiveTab] = useState('retargeting');
-  const [showSkeleton, setShowSkeleton] = useState(true);
-  const [timelineHeight, setTimelineHeight] = useState(200);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentFrame, setCurrentFrame] = useState(0);
-  const animationIntervalRef = useRef(null);
+    const handleMouseDown = useCallback((e) => {
+        if (!appContainerRef.current || !cameraRef.current) return;
+        const appRect = appContainerRef.current.getBoundingClientRect();
 
-
-  // Data State
-  const [timelineData, setTimelineData] = useState({});
-  const [timelineDuration, setTimelineDuration] = useState(240); // Total frames
-  const [performanceStats, setPerformanceStats] = useState({
-    fps: 0,
-    latency: 0,
-    confidence: 0,
-    cpu: 0,
-    gpu: 0,
-    ram: 0,
-  });
-  
-  // Refinement State
-  const [refinementValues, setRefinementValues] = useState({
-    smoothing: 30,
-    jitterReduction: 20,
-    motionAmplification: 100,
-  });
-
-  // Gemini AI is not used in this UI structure but kept for potential future use
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-  useEffect(() => {
-    let statsInterval;
-    if (isAnalyzing || isConnected) {
-        statsInterval = setInterval(() => {
-            setPerformanceStats({
-                fps: Number((Math.random() * 5 + 28).toFixed(1)),
-                latency: Math.floor(Math.random() * 15 + 15),
-                confidence: Math.floor(Math.random() * 8 + 90),
-                cpu: Math.floor(Math.random() * 25 + 50),
-                gpu: Math.floor(Math.random() * 30 + 65),
-                ram: Math.floor(Math.random() * 20 + 45),
-            });
-        }, 1000);
-    } else {
-        setPerformanceStats({ fps: 0, latency: 0, confidence: 0, cpu: 0, gpu: 0, ram: 0 });
-    }
-    return () => clearInterval(statsInterval);
-  }, [isAnalyzing, isConnected]);
-  
-  // Timeline playback effect
-  useEffect(() => {
-    if (isPlaying) {
-      animationIntervalRef.current = setInterval(() => {
-        setCurrentFrame(f => (f + 1) % (timelineDuration + 1));
-      }, 1000 / 30); // 30 FPS playback
-    } else {
-      clearInterval(animationIntervalRef.current);
-    }
-    return () => clearInterval(animationIntervalRef.current);
-  }, [isPlaying, timelineDuration]);
-
-
-  const handleConnect = useCallback(() => {
-    setIsConnecting(true);
-    setStatusMessage("Đang kết nối tới WebSocket...");
-    setTimeout(() => {
-      setIsConnected(true);
-      setIsConnecting(false);
-      setStatusMessage("Đã thiết lập kết nối WebSocket.");
-    }, 1500);
-  }, []);
-
-  const handleDisconnect = useCallback(() => {
-    setIsConnected(false);
-    setStatusMessage("Đã đóng kết nối WebSocket.");
-  }, []);
-  
-  const handleRefinementChange = (slider, value) => {
-    setRefinementValues(prev => ({ ...prev, [slider]: value }));
-  };
-
-  const runAnalysis = useCallback(() => {
-    setIsAnalyzing(true);
-    setAnalysisProgress(0);
-    setTimelineData({});
-    setStatusMessage(`Đang phân tích & Tạo Keyframe...`);
-
-    const analysisDuration = 4000;
-    const interval = setInterval(() => {
-       setAnalysisProgress(p => {
-           const nextP = p + (100 / (analysisDuration / 30));
-           if (nextP >= 100) {
-                clearInterval(interval);
-                setIsAnalyzing(false);
-                setStatusMessage("Phân tích hoàn tất.");
-                generateMockData();
-                return 100;
-           }
-           return nextP;
-       });
-    }, 30);
-  }, []);
-
-  const generateMockData = () => {
-      const newData = {};
-      timelineTracks.forEach(track => {
-          if (!track.isGroup) {
-              newData[track.id] = [];
-              for (let i = 0; i <= timelineDuration; i++) {
-                  if (Math.random() > 0.92) { // less frequent keyframes
-                      newData[track.id].push(i);
-                  }
-              }
-          }
-      });
-      setTimelineData(newData);
-  };
-  
-  const handleResizeMouseDown = useCallback((mouseDownEvent) => {
-    mouseDownEvent.preventDefault();
-    const startY = mouseDownEvent.clientY;
-    const startHeight = timelineHeight;
-
-    const handleMouseMove = (mouseMoveEvent) => {
-        const deltaY = startY - mouseMoveEvent.clientY;
-        const newHeight = startHeight + deltaY;
-        const minHeight = 120;
-        const maxHeight = 500;
-        if (newHeight >= minHeight && newHeight <= maxHeight) {
-            setTimelineHeight(newHeight);
+        if (e.target === resizerRef.current) {
+            // FIX: Add missing offsetX and offsetY properties to match the ref's type.
+            dragInfo.current = {
+                isResizing: true,
+                isDragging: false,
+                startX: e.clientX,
+                startY: e.clientY,
+                startW: camera.width,
+                startH: camera.height,
+                offsetX: 0,
+                offsetY: 0,
+            };
+        } else {
+            // FIX: Add missing startW and startH properties to match the ref's type.
+             dragInfo.current = {
+                isDragging: true,
+                isResizing: false,
+                startX: e.clientX,
+                startY: e.clientY,
+                offsetX: e.clientX - appRect.left - camera.x,
+                offsetY: e.clientY - appRect.top - camera.y,
+                startW: 0,
+                startH: 0,
+            };
         }
-    };
 
-    const handleMouseUp = () => {
+        e.preventDefault();
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+    }, [camera, appContainerRef]);
+
+    const handleMouseMove = useCallback((e) => {
+        if (!appContainerRef.current) return;
+        const appRect = appContainerRef.current.getBoundingClientRect();
+        const { isDragging, isResizing, startX, startY, startW, startH, offsetX, offsetY } = dragInfo.current;
+        
+        if (isDragging) {
+            let newX = e.clientX - appRect.left - offsetX;
+            let newY = e.clientY - appRect.top - offsetY;
+            
+            newX = Math.max(0, Math.min(newX, appRect.width - camera.width));
+            newY = Math.max(0, Math.min(newY, appRect.height - camera.height));
+
+            setCamera(c => ({ ...c, x: newX, y: newY }));
+        } else if (isResizing) {
+            let newW = startW + (e.clientX - startX);
+            let newH = startH + (e.clientY - startY);
+            
+            newW = Math.max(50, Math.min(newW, appRect.width - camera.x));
+            newH = Math.max(50, Math.min(newH, appRect.height - camera.y));
+
+            setCamera(c => ({ ...c, width: newW, height: newH }));
+        }
+    }, [camera, setCamera, appContainerRef]);
+
+    const handleMouseUp = useCallback(() => {
+        // FIX: Ensure all properties of the dragInfo ref object are reset.
+        dragInfo.current = { isDragging: false, isResizing: false, startX: 0, startY: 0, startW: 0, startH: 0, offsetX: 0, offsetY: 0 };
         window.removeEventListener('mousemove', handleMouseMove);
         window.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-  }, [timelineHeight]);
-
-
-  const AppHeader = () => html`
-    <header class="app-header">
-      <h1 class="app-header-title">YOLOv8Moho 2.0</h1>
-      <div class="app-header-controls">
-          <i class="fa-solid fa-window-minimize" title="Minimize"></i>
-      </div>
-    </header>
-  `;
-
-  const VideoInputPanel = () => html`
-    <div class="panel video-input-panel">
-      <div class="panel-header">
-        <h2 class="panel-title">Nguồn Video</h2>
-      </div>
-      <div class="video-placeholder">
-        <i class="fa-solid fa-video"></i>
-        <span>Video gốc hiển thị ở đây</span>
-      </div>
-      <div class="video-controls">
-        <button class="icon-btn" title="Play"><i class="fa-solid fa-play"></i></button>
-        <button class="icon-btn" title="Pause"><i class="fa-solid fa-pause"></i></button>
-        <button class="icon-btn" title="Stop"><i class="fa-solid fa-stop"></i></button>
-        <div class="seeker-bar"></div>
-      </div>
-      <div class="control-group">
-        <button onClick=${() => document.getElementById('video-input')?.click()} disabled=${isAnalyzing}>
-          <i class="fa-solid fa-upload"></i> Tải lên file video
-        </button>
-        <input type="file" id="video-input" hidden accept="video/*" />
-        <button class="secondary" disabled=${isAnalyzing}>
-          <i class="fa-solid fa-camera"></i> Sử dụng Webcam
-        </button>
-      </div>
-    </div>
-  `;
-
-  const AnimationPreviewPanel = () => html`
-    <div class="panel animation-preview-panel">
-       <div class="panel-header">
-        <h2 class="panel-title">Xem trước Diễn hoạt</h2>
-        <div class="toggle-switch">
-          <input type="checkbox" id="skeleton-toggle" checked=${showSkeleton} onChange=${() => setShowSkeleton(!showSkeleton)} />
-          <label for="skeleton-toggle">Hiển thị Bộ xương</label>
-        </div>
-      </div>
-      <div class="animation-placeholder">
-         <i class="fa-solid fa-robot"></i>
-         <span>Nhân vật 2D của bạn sẽ diễn hoạt ở đây</span>
-         ${showSkeleton && html`<div class="skeleton-overlay-mock"></div>`}
-      </div>
-    </div>
-  `;
-
-  const RightControlPanel = () => {
-    const TabButton = ({ id, title }) => html`
-      <button 
-        class=${`tab-button ${activeTab === id ? 'active' : ''}`}
-        onClick=${() => setActiveTab(id)}
-      >
-        ${title}
-      </button>
-    `;
+    }, [handleMouseMove]);
 
     return html`
-      <div class="panel right-control-panel">
-        <div class="main-actions-group">
-            <button><i class="fa-solid fa-file-import"></i> Tải lên file .moho</button>
-            <button class="primary-action" onClick=${runAnalysis} disabled=${isAnalyzing}>
-                ${isAnalyzing ? html`<i class="fa-solid fa-spinner fa-spin"></i>` : html`<i class="fa-solid fa-cogs"></i>`}
-                ${isAnalyzing ? 'Đang xử lý...' : 'Phân tích & Tạo Keyframe'}
-            </button>
-            ${isAnalyzing && html`
-                <div class="progress-bar-container">
-                    <div class="progress-bar" style=${{ width: `${analysisProgress}%` }}></div>
+        <div 
+            ref=${cameraRef}
+            className="virtual-camera-overlay"
+            style=${{ 
+                left: `${camera.x}px`, 
+                top: `${camera.y}px`, 
+                width: `${camera.width}px`, 
+                height: `${camera.height}px`,
+                backgroundColor: `rgba(20, 20, 20, ${0.1 + (camera.opacity - 0.1) * 0.5})`, // Link background to opacity
+                transition: 'background-color 0.2s'
+            }}
+        >
+            <div className="virtual-camera-header" onMouseDown=${handleMouseDown}>
+                <div className="virtual-camera-title">
+                    <i className="fa-solid fa-camera-movie"></i> Camera Ảo
                 </div>
-            `}
+                <div className="virtual-camera-controls">
+                    <label htmlFor="opacity-slider">Opacity</label>
+                    <input 
+                        id="opacity-slider"
+                        type="range" 
+                        min="0.1" 
+                        max="1" 
+                        step="0.05" 
+                        value=${camera.opacity} 
+                        onInput=${(e) => setCamera(c => ({...c, opacity: parseFloat(e.target.value)}))}
+                        onMouseDown=${e => e.stopPropagation()}
+                    />
+                </div>
+            </div>
+            <div ref=${resizerRef} className="virtual-camera-resizer" onMouseDown=${handleMouseDown}></div>
         </div>
-
-        <nav class="tabs-nav">
-          <${TabButton} id="retargeting" title="Ánh xạ xương" />
-          <${TabButton} id="refinement" title="Tinh chỉnh" />
-        </nav>
-        
-        <div class="tab-content">
-          ${activeTab === 'retargeting' && html`<${BoneRetargetingTab} />`}
-          ${activeTab === 'refinement' && html`<${RefinementTab} />`}
-        </div>
-
-        <${ConnectionPanel} />
-        <${PerformanceDashboard} stats=${performanceStats} />
-      </div>
     `;
-  };
-
-  const BoneRetargetingTab = () => {
-      const yoloJoints = ["left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip"];
-      const mohoBones = ["Chưa chọn", "XuongVaiTrai", "XuongVaiPhai", "KhuyuTayTrai", "KhuyuTayPhai", "CoTayTrai", "CoTayPhai", "HongTrai", "HongPhai", "DauGoiTrai"];
-
-      return html`
-        <div class="tab-pane">
-            <h3 class="panel-subtitle">Ánh xạ khớp YOLOv8 tới xương Moho</h3>
-            <div class="bone-mapping-list">
-                ${yoloJoints.map(joint => html`
-                    <div class="mapping-item">
-                        <label>${joint}</label>
-                        <select>
-                            ${mohoBones.map(bone => html`<option value=${bone}>${bone}</option>`)}
-                        </select>
-                    </div>
-                `)}
-            </div>
-            <button class="secondary small" style=${{marginTop: '1rem'}}><i class="fa-solid fa-magic"></i> Tự động nhận diện</button>
-        </div>
-      `;
-  };
-
-  const RefinementTab = () => html`
-    <div class="tab-pane">
-        <h3 class="panel-subtitle">Làm mượt và Tinh chỉnh Chuyển động</h3>
-        <div class="refinement-sliders">
-            <div class="slider-group">
-                <label>Làm mượt (Smoothing)</label>
-                <input type="range" min="0" max="100" value=${refinementValues.smoothing} onInput=${e => handleRefinementChange('smoothing', e.target.value)} />
-                <span>${refinementValues.smoothing}</span>
-            </div>
-            <div class="slider-group">
-                <label>Giảm thiểu rung lắc (Jitter Reduction)</label>
-                <input type="range" min="0" max="100" value=${refinementValues.jitterReduction} onInput=${e => handleRefinementChange('jitterReduction', e.target.value)} />
-                <span>${refinementValues.jitterReduction}</span>
-            </div>
-            <div class="slider-group">
-                <label>Khuếch đại chuyển động (Motion Amplification)</label>
-                <input type="range" min="50" max="200" value=${refinementValues.motionAmplification} onInput=${e => handleRefinementChange('motionAmplification', e.target.value)} />
-                <span>${refinementValues.motionAmplification}%</span>
-            </div>
-        </div>
-    </div>
-  `;
-
-  const TimelinePanel = ({ data, duration }) => html`
-    <div class="panel timeline-panel">
-      <div class="panel-header">
-        <div class="timeline-controls-left">
-            <h2 class="panel-title">Dòng thời gian</h2>
-            <button class="icon-btn small" title="Play/Pause" onClick=${() => setIsPlaying(!isPlaying)}>
-                <i class=${`fa-solid ${isPlaying ? 'fa-pause' : 'fa-play'}`}></i>
-            </button>
-             <button class="icon-btn small" title="Stop" onClick=${() => {setIsPlaying(false); setCurrentFrame(0);}}>
-                <i class="fa-solid fa-stop"></i>
-            </button>
-        </div>
-        <div class="timeline-controls-right">
-           <button class="icon-btn small secondary" title="Add Keyframe" disabled=${Object.keys(data).length === 0}><i class="fa-solid fa-plus"></i></button>
-           <button class="icon-btn small secondary" title="Remove Keyframe" disabled=${Object.keys(data).length === 0}><i class="fa-solid fa-trash-can"></i></button>
-           <button class="secondary small" disabled=${Object.keys(data).length === 0}><i class="fa-solid fa-fire"></i> Nướng (Bake Animation)</button>
-        </div>
-      </div>
-      <div class="timeline-content">
-        <div class="timeline-sidebar">
-            ${timelineTracks.map(track => html`
-                <div class=${`timeline-track-label ${track.isGroup ? 'group-label' : ''}`}>
-                    <i class=${`${track.icon} fa-fw`}></i>
-                    <span>${track.label}</span>
-                </div>
-            `)}
-        </div>
-        <div class="timeline-main">
-            <div class="timeline-ruler">
-                ${Array.from({ length: duration / 10 + 1 }).map((_, i) => html`
-                    <div class="ruler-tick" style=${{left: `${i*10/duration*100}%`}} data-frame=${i*10}></div>
-                `)}
-            </div>
-            <div class="playhead" style=${{ left: `${currentFrame / duration * 100}%` }}></div>
-            <div class="tracks-area">
-                ${timelineTracks.map(track => html`
-                    <div class=${`timeline-track ${track.isGroup ? 'group-track' : ''}`}>
-                        ${!track.isGroup && data[track.id]?.map(frame => html`
-                            <div class="keyframe" style=${{ left: `${frame / duration * 100}%` }} title=${`Frame ${frame}`}></div>
-                        `)}
-                    </div>
-                `)}
-            </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const ConnectionPanel = () => html`
-    <div class="panel-section">
-       <h3 class="panel-subtitle">Kết nối</h3>
-        <div class="control-group-row">
-            <button onClick=${handleConnect} disabled=${isConnected || isConnecting || isAnalyzing}>
-              ${isConnecting ? html`<i class="fa-solid fa-spinner fa-spin"></i>` : html`<i class="fa-solid fa-link"></i>`}
-              ${isConnecting ? 'Đang kết nối...' : 'Kết nối'}
-            </button>
-            <button class="secondary" onClick=${handleDisconnect} disabled=${!isConnected || isAnalyzing}>
-              <i class="fa-solid fa-link-slash"></i> Ngắt kết nối
-            </button>
-        </div>
-    </div>
-  `;
-
-  const PerformanceDashboard = ({ stats }) => html`
-    <div class="panel-section">
-      <h3 class="panel-subtitle">Bảng Thống Kê Hiệu Suất (Thời gian thực)</h3>
-      <div class="stats-grid">
-        <div class="stat-item">
-            <i class="fa-solid fa-forward-fast stat-icon"></i>
-            <div class="stat-value">${stats.fps}</div>
-            <div class="stat-label">AI FPS</div>
-        </div>
-        <div class="stat-item">
-            <i class="fa-solid fa-stopwatch stat-icon"></i>
-            <div class="stat-value">${stats.latency}</div>
-            <div class="stat-label">Độ trễ</div>
-        </div>
-        <div class="stat-item">
-            <i class="fa-solid fa-microchip stat-icon"></i>
-            <div class="stat-value">${stats.cpu}%</div>
-            <div class="stat-label">Tải CPU</div>
-        </div>
-        <div class="stat-item">
-            <i class="fa-solid fa-gamepad stat-icon"></i>
-            <div class="stat-value">${stats.gpu}%</div>
-            <div class="stat-label">Tải GPU</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const StatusBar = () => html`
-    <div class="status-bar">
-      <div class="status-indicator">
-        <div class=${`status-light ${isConnected ? 'connected' : 'disconnected'}`}></div>
-        <span>${statusMessage}</span>
-      </div>
-      <span>v2.2.0</span>
-    </div>
-  `;
-
-  return html`
-    <div class="app-container">
-      <${AppHeader} />
-      <div class="main-content">
-        <div class="panels-container">
-          <${VideoInputPanel} />
-          <${AnimationPreviewPanel} />
-          <${RightControlPanel} />
-        </div>
-        <div class="timeline-resizer" onMouseDown=${handleResizeMouseDown}></div>
-        <div class="timeline-panel-wrapper" style=${{ height: `${timelineHeight}px` }}>
-          <${TimelinePanel} data=${timelineData} duration=${timelineDuration} />
-        </div>
-      </div>
-      <${StatusBar} />
-    </div>
-  `;
 };
 
-render(html`<${App} />`, document.getElementById("root"));
+const TimelinePanel = ({ keyframes, currentFrame, totalFrames, onFrameChange, visibleTracks, filter, onFilterChange, zoom, pan, onZoom, onPan }) => {
+    const timelineMainRef = useRef<HTMLDivElement>(null);
+    const dragInfo = useRef({ isPanning: false, startX: 0, startPan: 0 });
+
+    const handlePan = useCallback((e: MouseEvent) => {
+        if (!dragInfo.current.isPanning) return;
+        const dx = e.clientX - dragInfo.current.startX;
+        const newPan = dragInfo.current.startPan + dx;
+        onPan(newPan);
+    }, [onPan]);
+
+    const handlePanEnd = useCallback(() => {
+        dragInfo.current.isPanning = false;
+        if(timelineMainRef.current) timelineMainRef.current.classList.remove('panning');
+        window.removeEventListener('mousemove', handlePan);
+        window.removeEventListener('mouseup', handlePanEnd);
+    }, [handlePan]);
+
+    const handlePanStart = useCallback((e: MouseEvent) => {
+        e.preventDefault();
+        dragInfo.current = {
+            isPanning: true,
+            startX: e.clientX,
+            startPan: pan,
+        };
+        if(timelineMainRef.current) timelineMainRef.current.classList.add('panning');
+        window.addEventListener('mousemove', handlePan);
+        window.addEventListener('mouseup', handlePanEnd);
+    }, [pan, handlePan, handlePanEnd]);
+
+    const handleZoom = useCallback((e: WheelEvent) => {
+        e.preventDefault();
+        const timelineRect = timelineMainRef.current.getBoundingClientRect();
+        const pointerX = e.clientX - timelineRect.left;
+        const pointerFrame = (pointerX - pan) / (FRAME_WIDTH_PX * zoom);
+
+        let newZoom = zoom - e.deltaY * 0.001 * zoom;
+        newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+        
+        const newPan = pointerX - (pointerFrame * FRAME_WIDTH_PX * newZoom);
+
+        onZoom(newZoom);
+        onPan(newPan);
+    }, [zoom, pan, onZoom, onPan]);
+
+    useEffect(() => {
+        const mainEl = timelineMainRef.current;
+        if (mainEl) {
+            mainEl.addEventListener('wheel', handleZoom, { passive: false });
+            return () => mainEl.removeEventListener('wheel', handleZoom);
+        }
+    }, [handleZoom]);
+
+    const canvasWidth = totalFrames * FRAME_WIDTH_PX * zoom;
+
+    const rulerTicks = useMemo(() => {
+        const ticks = [];
+        for (let frame = 0; frame <= totalFrames; frame += RULER_TICK_INTERVAL_FRAMES) {
+            ticks.push(frame);
+        }
+        return ticks;
+    }, [totalFrames]);
+    
+    return html`
+        <div class="panel timeline-panel">
+            <div class="panel-header">
+                <div class="timeline-controls-left">
+                     <button class="small icon-btn"><i class="fa-solid fa-backward-step"></i></button>
+                    <button class="small icon-btn"><i class="fa-solid fa-play"></i></button>
+                    <button class="small icon-btn"><i class="fa-solid fa-forward-step"></i></button>
+                </div>
+                <div class="timeline-filter-group">
+                    <button onClick=${() => onFilterChange('all')} className=${filter === 'all' ? 'active' : ''}>Tất cả</button>
+                    <button onClick=${() => onFilterChange('bone')} className=${filter === 'bone' ? 'active' : ''}>Xương</button>
+                    <button onClick=${() => onFilterChange('camera')} className=${filter === 'camera' ? 'active' : ''}>Camera</button>
+                </div>
+                <div class="timeline-controls-right">
+                    <span>${currentFrame} / ${totalFrames}</span>
+                </div>
+            </div>
+            <div class="timeline-content">
+                <div class="timeline-sidebar">
+                    ${visibleTracks.map(track => html`
+                        <div key=${track.id} className="timeline-track-label ${track.isGroup ? 'group-label' : ''}" style=${{ paddingLeft: track.parent ? '2rem' : '1rem' }}>
+                           <i className=${track.icon}></i> ${track.label}
+                        </div>
+                    `)}
+                </div>
+                <div ref=${timelineMainRef} class="timeline-main" onMouseDown=${handlePanStart}>
+                   <div class="timeline-canvas" style=${{ width: `${canvasWidth}px`, transform: `translateX(${pan}px)` }}>
+                       <div class="timeline-ruler">
+                           ${rulerTicks.map(frame => html`
+                               <div key=${frame} class="ruler-tick" data-frame=${frame} style=${{ left: `${frame * FRAME_WIDTH_PX * zoom}px` }}></div>
+                           `)}
+                       </div>
+                       <div class="tracks-area">
+                           ${visibleTracks.map(track => html`
+                               <div key=${track.id} className="timeline-track ${track.isGroup ? 'group-track' : ''}">
+                                   ${!track.isGroup && keyframes[track.id]?.map(frame => html`
+                                       <div 
+                                         key=${`${track.id}-${frame}`}
+                                         className="keyframe"
+                                         style=${{ left: `${frame * FRAME_WIDTH_PX * zoom}px` }}
+                                         onClick=${(e) => { e.stopPropagation(); onFrameChange(frame); }}
+                                       ></div>
+                                   `)}
+                               </div>
+                           `)}
+                       </div>
+                       <div class="playhead" style=${{ left: `${currentFrame * FRAME_WIDTH_PX * zoom}px` }}></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+const App = () => {
+    const [keyframes, setKeyframes] = useState({});
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [currentFrame, setCurrentFrame] = useState(0);
+    const [totalFrames, setTotalFrames] = useState(300); // Default: 10 seconds at 30fps
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [activeTab, setActiveTab] = useState('mapping');
+    const [timelineFilter, setTimelineFilter] = useState('all');
+    
+    // Timeline view state
+    const [timelineZoom, setTimelineZoom] = useState(1);
+    const [timelinePan, setTimelinePan] = useState(0);
+    
+    // Video state
+    const [videoSrc, setVideoSrc] = useState<string | null>(null);
+    const [videoError, setVideoError] = useState<string | null>(null);
+    
+    // Virtual Camera State
+    const [camera, setCamera] = useState({ x: 50, y: 50, width: 300, height: 200, opacity: 0.8 });
+
+    // REFS
+    const playheadIntervalRef = useRef<number | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const appContainerRef = useRef<HTMLDivElement>(null);
+
+
+    // MEMOIZED VALUES
+    const visibleTracks = useMemo(() => {
+        if (timelineFilter === 'all') return timelineTracks;
+        
+        const filtered = timelineTracks.filter(track => {
+             // Include the track if its type matches the filter
+            if (track.type === timelineFilter) return true;
+            // Include a group if any of its children match the filter
+            if (track.isGroup) {
+                return timelineTracks.some(child => child.parent === track.id && child.type === timelineFilter);
+            }
+            return false;
+        });
+
+        // Ensure parent groups are included for visible children
+        const finalTracks = [];
+        const includedGroups = new Set();
+        filtered.forEach(track => {
+            if(track.parent && !includedGroups.has(track.parent)){
+                const group = timelineTracks.find(t => t.id === track.parent);
+                if(group){
+                    finalTracks.push(group);
+                    includedGroups.add(group.id);
+                }
+            }
+            if(!finalTracks.some(t => t.id === track.id)){
+               finalTracks.push(track);
+            }
+        });
+
+        return finalTracks;
+
+    }, [timelineFilter]);
+
+
+    // HANDLERS
+    const handleFileChange = useCallback((event: Event) => {
+        const target = event.target as HTMLInputElement;
+        const file = target.files?.[0];
+        if (!file) return;
+
+        // Reset previous state and revoke old URL if it exists
+        if (videoSrc) {
+            URL.revokeObjectURL(videoSrc);
+        }
+        setVideoSrc(null);
+        setVideoError(null);
+
+        const videoElement = document.createElement('video');
+        const url = URL.createObjectURL(file);
+
+        videoElement.addEventListener('loadedmetadata', () => {
+            if (videoElement.duration > 60) {
+                setVideoError('Lỗi: Video phải từ 60 giây trở xuống.');
+                setVideoSrc(null);
+                setTotalFrames(300); // Reset to default
+                URL.revokeObjectURL(url); // Clean up immediately since it's invalid
+            } else {
+                setVideoError(null);
+                setVideoSrc(url); // URL is now in use by the component
+                setTotalFrames(Math.floor(videoElement.duration * FPS));
+                setCurrentFrame(0); // Reset playhead
+            }
+        });
+
+        videoElement.addEventListener('error', () => {
+            setVideoError('Lỗi: Không thể tải tệp video.');
+            setVideoSrc(null);
+            URL.revokeObjectURL(url); // Clean up on error
+        });
+
+        videoElement.src = url;
+    }, [videoSrc]);
+
+    const handleAnalyze = useCallback(async () => {
+        if (!videoSrc) return;
+        setIsAnalyzing(true);
+        setProgress(0);
+        
+        // Mock analysis
+        const analysisDuration = 2000;
+        const interval = setInterval(() => {
+            setProgress(p => {
+                const newProgress = p + (100 / (analysisDuration / 100));
+                if (newProgress >= 100) {
+                    clearInterval(interval);
+                    setIsAnalyzing(false);
+                    // Mock keyframe generation
+                    const newKeyframes = {};
+                    timelineTracks.forEach(track => {
+                        if (!track.isGroup) {
+                            newKeyframes[track.id] = [];
+                            for (let i = 0; i < 5; i++) {
+                                newKeyframes[track.id].push(Math.floor(Math.random() * totalFrames));
+                            }
+                        }
+                    });
+                    setKeyframes(newKeyframes);
+                    return 100;
+                }
+                return newProgress;
+            });
+        }, 100);
+    }, [videoSrc, totalFrames]);
+
+    // Cleanup for video object URL when component unmounts or videoSrc changes
+    useEffect(() => {
+      return () => {
+        if (videoSrc) {
+          URL.revokeObjectURL(videoSrc);
+        }
+      };
+    }, [videoSrc]);
+    
+
+    return html`
+        <div ref=${appContainerRef} className="app-container">
+            <header className="app-header">
+                <h1 className="app-header-title">YOLOv8 to Moho Keyframe Assistant</h1>
+            </header>
+
+            <main className="main-content">
+                <div className="panels-container middle-panel-group">
+                    
+                    <div className="panel video-input-panel">
+                        <div className="panel-header">
+                            <h2 className="panel-title">Nguồn Video</h2>
+                        </div>
+                        <div className="video-placeholder">
+                             ${videoSrc ? html`
+                                <video src=${videoSrc} controls className="video-preview" />
+                            ` : html`
+                                <>
+                                    <i className="fa-solid fa-video"></i>
+                                    <span>Chọn video (tối đa 60s)</span>
+                                </>
+                            `}
+                        </div>
+                        ${videoError && html`<div class="video-error-message">${videoError}</div>`}
+                        <div className="video-controls">
+                            <input
+                                type="file"
+                                ref=${fileInputRef}
+                                onChange=${handleFileChange}
+                                accept="video/*"
+                                style=${{ display: 'none' }}
+                                id="video-upload"
+                            />
+                            <button className="secondary" onClick=${() => fileInputRef.current?.click()}>
+                                <i className="fa-solid fa-folder-open"></i>
+                                Chọn Video
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div className="panel retargeting-studio-panel">
+                         <div className="panel-header">
+                            <h2 className="panel-title">Retargeting Studio</h2>
+                        </div>
+                        <h3 className="panel-subtitle">Keypoint Visualizer</h3>
+                         <div className="visualizer-placeholder">
+                            <!-- Mock nodes for visualization -->
+                            <div class="node-mock" style="top: 20%; left: 50%;"></div>
+                            <div class="node-mock" style="top: 40%; left: 40%;"></div>
+                            <div class="node-mock" style="top: 40%; left: 60%;"></div>
+                            <div class="node-mock" style="top: 60%; left: 30%;"></div>
+                            <div class="node-mock" style="top: 60%; left: 70%;"></div>
+                        </div>
+                    </div>
+                    
+                    <div className="panel right-control-panel">
+                        <div className="tabs-nav">
+                           <button className=${`tab-button ${activeTab === 'mapping' ? 'active' : ''}`} onClick=${() => setActiveTab('mapping')}>Bone Mapping</button>
+                           <button className=${`tab-button ${activeTab === 'settings' ? 'active' : ''}`} onClick=${() => setActiveTab('settings')}>Cài đặt</button>
+                        </div>
+                        <div className="main-actions-group">
+                            <button
+                                className="primary-action"
+                                onClick=${handleAnalyze}
+                                disabled=${!videoSrc || isAnalyzing}
+                            >
+                                ${isAnalyzing ? 'Đang xử lý...' : html`
+                                    <>
+                                        <i className="fa-solid fa-wand-magic-sparkles"></i>
+                                        Phân tích & Tạo Keyframe
+                                    </>
+                                `}
+                            </button>
+                            <div className="progress-bar-container">
+                                <div className="progress-bar" style=${{ width: `${progress}%` }}></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="timeline-resizer"></div>
+                <div className="timeline-panel-wrapper" style=${{ height: '350px' }}>
+                     <${TimelinePanel} 
+                        keyframes=${keyframes}
+                        currentFrame=${currentFrame}
+                        totalFrames=${totalFrames}
+                        onFrameChange=${setCurrentFrame}
+                        visibleTracks=${visibleTracks}
+                        filter=${timelineFilter}
+                        onFilterChange=${setTimelineFilter}
+                        zoom=${timelineZoom}
+                        pan=${timelinePan}
+                        onZoom=${setTimelineZoom}
+                        onPan=${setTimelinePan}
+                     />
+                </div>
+            </main>
+            
+            <${VirtualCameraOverlay} camera=${camera} setCamera=${setCamera} appContainerRef=${appContainerRef} />
+
+            <div className="status-bar">
+                <span>Ready</span>
+                <span>Frames: ${totalFrames}</span>
+            </div>
+        </div>
+    `;
+};
+
+render(html`<${App} />`, document.getElementById('root'));

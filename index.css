@@ -1,21 +1,23 @@
-
 :root {
-  --background-dark: #1a1a1a;
-  --panel-background: #2c2c2c;
-  --panel-border: #444;
+  --background-dark: #1e1e1e;
+  --panel-background: #2a2d30;
+  --panel-border: #3e3e42;
   --text-primary: #e0e0e0;
   --text-secondary: #a0a0a0;
-  --accent-color: #00aaff;
-  --accent-hover: #0088cc;
+  --accent-color: #007acc;
+  --accent-hover: #005f9e;
   --btn-secondary-bg: #4f4f4f;
   --btn-secondary-hover: #666666;
-  --success-color: #28a745;
+  --success-color: #27a243;
+  --success-hover: #1e7e34;
   --error-color: #dc3545;
   --keyframe-color: #ffffff;
   --timeline-track-bg: #222;
   --timeline-group-bg: #383838;
   --playhead-color: #ff4d4d;
   --font-family: 'Roboto', sans-serif;
+  --green-btn-bg: #00938a;
+  --green-btn-hover: #007a72;
 }
 
 * {
@@ -37,6 +39,7 @@ html, body {
   flex-direction: column;
   height: 100vh;
   background-color: var(--background-dark);
+  position: relative; /* Needed for absolute positioning of virtual camera */
 }
 
 .app-header {
@@ -54,16 +57,6 @@ html, body {
   font-weight: 500;
 }
 
-.app-header-controls i {
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.app-header-controls i:hover {
-  color: var(--text-primary);
-}
-
 .main-content {
   flex-grow: 1;
   overflow: hidden;
@@ -75,10 +68,26 @@ html, body {
 .panels-container {
     flex-grow: 1;
     display: grid;
-    grid-template-columns: minmax(300px, 1fr) 2fr minmax(350px, 1.2fr);
-    gap: 0.5rem;
-    padding: 0.5rem 0.5rem 0 0.5rem;
+    padding: 0.5rem;
     min-height: 0;
+}
+
+.horizontal-resizer {
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 0.2s;
+}
+
+.horizontal-resizer:hover {
+  background-color: rgba(0, 122, 204, 0.2);
+}
+
+.middle-panel-group {
+    display: grid;
+    grid-template-columns: 1fr 1.5fr 1fr;
+    gap: 0.5rem;
+    min-width: 0;
+    overflow: hidden;
 }
 
 
@@ -119,8 +128,7 @@ html, body {
   border-bottom: 1px solid var(--panel-border);
 }
 
-.video-input-panel .video-placeholder,
-.animation-preview-panel .animation-placeholder {
+.video-input-panel .video-placeholder {
     flex-grow: 1;
     display: flex;
     flex-direction: column;
@@ -134,8 +142,7 @@ html, body {
     position: relative;
 }
 
-.video-input-panel .video-placeholder i,
-.animation-preview-panel .animation-placeholder i {
+.video-input-panel .video-placeholder i {
     font-size: 3rem;
     margin-bottom: 1rem;
 }
@@ -144,42 +151,22 @@ html, body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    margin: 1rem 0;
+    margin-top: 1rem;
 }
 
-.seeker-bar {
-    flex-grow: 1;
-    height: 4px;
-    background-color: #555;
-    border-radius: 2px;
+.video-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 4px;
+}
+.video-error-message {
+    color: var(--error-color);
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    text-align: center;
 }
 
-.toggle-switch {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.toggle-switch label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.toggle-switch input {
-  cursor: pointer;
-}
-
-.skeleton-overlay-mock {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 50px;
-  height: 100px;
-  border: 2px dashed var(--accent-color);
-  opacity: 0.5;
-}
 
 .right-control-panel {
     gap: 1.5rem;
@@ -193,11 +180,13 @@ html, body {
 
 .tabs-nav {
     display: flex;
-    border-bottom: 1px solid var(--panel-border);
+    border-bottom: 2px solid var(--panel-border);
+    margin-bottom: 1rem;
 }
 
 .tab-button {
-    padding: 0.75rem 1rem;
+    padding: 0.75rem 0.5rem;
+    margin-right: 1rem;
     border: none;
     background-color: transparent;
     color: var(--text-secondary);
@@ -205,6 +194,7 @@ html, body {
     font-size: 0.9rem;
     border-bottom: 2px solid transparent;
     transition: color 0.2s, border-color 0.2s;
+    margin-bottom: -2px;
 }
 .tab-button:hover {
     color: var(--text-primary);
@@ -213,10 +203,6 @@ html, body {
     color: var(--accent-color);
     border-bottom-color: var(--accent-color);
     font-weight: 500;
-}
-
-.tab-content {
-    padding-top: 1rem;
 }
 
 .bone-mapping-list {
@@ -235,9 +221,10 @@ html, body {
 .mapping-item label {
     font-size: 0.85rem;
     color: var(--text-primary);
-    text-align: right;
+    font-family: monospace;
 }
 
+select,
 .mapping-item select {
     background-color: var(--background-dark);
     border: 1px solid var(--panel-border);
@@ -248,44 +235,9 @@ html, body {
     width: 100%;
 }
 
-.refinement-sliders {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-}
-
-.slider-group {
-    display: grid;
-    grid-template-columns: 1fr 100px 30px;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.slider-group label {
-    font-size: 0.85rem;
-}
-
-.slider-group input[type="range"] {
-    width: 100%;
-}
-
-.slider-group span {
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    text-align: right;
-}
-
-
-.panel-section {
-    border-top: 1px solid var(--panel-border);
-    padding-top: 1.5rem;
-    margin-top: auto;
-}
-
 .status-bar {
   height: 28px;
-  background-color: var(--panel-background);
-  border-top: 1px solid var(--panel-border);
+  background-color: #000;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -293,28 +245,8 @@ html, body {
   font-size: 0.8rem;
   color: var(--text-secondary);
   flex-shrink: 0;
-}
-
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.status-light {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  transition: background-color 0.3s;
-}
-
-.status-light.connected {
-  background-color: var(--success-color);
-  box-shadow: 0 0 5px var(--success-color);
-}
-
-.status-light.disconnected {
-  background-color: var(--error-color);
+  border-top: 1px solid var(--panel-border);
+  z-index: 1001; /* Above virtual camera */
 }
 
 button {
@@ -348,7 +280,7 @@ button.primary-action {
     background-color: var(--success-color);
 }
 button.primary-action:hover {
-    background-color: #218838;
+    background-color: var(--success-hover);
 }
 
 button.secondary {
@@ -359,6 +291,14 @@ button.secondary:hover {
   background-color: var(--btn-secondary-hover);
 }
 
+button.green-btn {
+    background-color: var(--green-btn-bg);
+}
+button.green-btn:hover {
+    background-color: var(--green-btn-hover);
+}
+
+
 button.small {
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;
@@ -367,6 +307,10 @@ button.small {
 button.icon-btn {
     width: auto;
     padding: 0.5rem 0.75rem;
+    background-color: var(--btn-secondary-bg);
+}
+button.icon-btn:hover {
+    background-color: var(--btn-secondary-hover);
 }
 
 .control-group {
@@ -376,16 +320,12 @@ button.icon-btn {
   margin-top: auto;
 }
 
-.control-group-row {
-    display: flex;
-    gap: 0.75rem;
-}
-
 .progress-bar-container {
     width: 100%;
     background-color: var(--background-dark);
     border-radius: 4px;
-    height: 8px;
+    height: 4px;
+    overflow: hidden;
 }
 
 .progress-bar {
@@ -432,10 +372,38 @@ button.icon-btn {
     margin-left: auto;
 }
 
+.timeline-filter-group {
+    display: flex;
+    align-items: center;
+    background-color: var(--background-dark);
+    border-radius: 4px;
+    padding: 2px;
+    margin-left: 1rem;
+}
+.timeline-filter-group button {
+    background-color: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.25rem 0.75rem;
+}
+.timeline-filter-group button:hover {
+    background-color: var(--btn-secondary-bg);
+    color: var(--text-primary);
+}
+.timeline-filter-group button.active {
+    background-color: var(--accent-color);
+    color: white;
+    font-weight: 500;
+}
+.timeline-filter-group button.active:hover {
+    background-color: var(--accent-hover);
+}
+
+
 .timeline-content {
     flex-grow: 1;
     display: flex;
-    overflow: hidden; /* Important for scrolling children */
+    overflow: hidden;
     background-color: var(--background-dark);
 }
 .timeline-sidebar {
@@ -447,9 +415,19 @@ button.icon-btn {
 }
 .timeline-main {
     flex-grow: 1;
-    overflow-x: auto;
+    overflow: hidden; /* Changed from auto to hidden for manual control */
     position: relative;
+    cursor: grab;
+    user-select: none;
 }
+.timeline-main.panning {
+    cursor: grabbing;
+}
+.timeline-canvas {
+    position: relative;
+    height: 100%;
+}
+
 
 .timeline-track-label {
     display: flex;
@@ -481,8 +459,7 @@ button.icon-btn {
 .timeline-ruler {
     height: 25px;
     border-bottom: 1px solid var(--panel-border);
-    position: sticky;
-    top: 0;
+    position: relative; /* No longer sticky */
     background-color: var(--panel-background);
     z-index: 1;
 }
@@ -494,6 +471,7 @@ button.icon-btn {
     color: var(--text-secondary);
     font-size: 0.7rem;
     padding-left: 4px;
+    top: 0;
 }
 .ruler-tick::after {
     content: attr(data-frame);
@@ -511,7 +489,6 @@ button.icon-btn {
 
 .tracks-area {
     position: relative;
-    min-width: 2000px; /* Example large width for scrolling */
 }
 
 .timeline-track {
@@ -542,35 +519,207 @@ button.icon-btn {
     background-color: var(--accent-color);
 }
 
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1rem;
+/* New Retargeting Studio Styles */
+.keypoint-panel {
+    padding-top: 0;
 }
 
-.stat-item {
-    background-color: var(--background-dark);
-    padding: 0.75rem;
-    border-radius: 4px;
-    text-align: center;
-    border: 1px solid var(--panel-border);
+.keypoint-panel .panel-header {
+    position: sticky;
+    top: 0;
+    background: var(--panel-background);
+    z-index: 1;
+    padding-top: 1rem;
 }
 
-.stat-icon {
-    font-size: 1.25rem;
-    color: var(--accent-color);
+.keypoint-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
     margin-bottom: 0.5rem;
+    padding-left: 0.25rem;
 }
 
-.stat-value {
-    font-size: 1.25rem;
+.keypoint-list {
+    list-style: none;
+    margin-bottom: 1rem;
+}
+
+.keypoint-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.25rem;
+    border-radius: 4px;
+    background-color: var(--background-dark);
+    margin-bottom: 4px;
+}
+
+.keypoint-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.keypoint-name {
+    font-size: 0.85rem;
     font-weight: 500;
+}
+
+.keypoint-child {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.delete-btn {
+    background: transparent;
+    border: 1px solid var(--btn-secondary-bg);
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    width: auto;
+}
+
+.delete-btn:hover {
+    background-color: var(--btn-secondary-bg);
     color: var(--text-primary);
 }
 
-.stat-label {
-    font-size: 0.75rem;
+.retargeting-visualizer-panel {
+    padding-bottom: 0;
+}
+
+.visualizer-placeholder {
+    flex-grow: 1;
+    background-color: #000;
+    border-radius: 4px;
+    position: relative;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.07) 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+.node-mock {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background-color: var(--text-secondary);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.retargeting-config {
+    margin-top: auto;
+    padding-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.retargeting-config .panel-subtitle {
+    margin-bottom: 0.5rem;
+}
+
+/* Virtual Camera Styles */
+.virtual-camera-overlay {
+    position: absolute;
+    border: 2px dashed var(--playhead-color);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+    border-radius: 4px;
+    overflow: hidden;
+    transition: background-color 0.2s ease;
+}
+
+.virtual-camera-header {
+    background-color: rgba(42, 45, 48, 0.9);
+    padding: 4px 8px;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.8rem;
     color: var(--text-secondary);
-    margin-top: 0.25rem;
+    flex-shrink: 0;
+}
+
+.virtual-camera-header:active {
+    cursor: grabbing;
+}
+
+.virtual-camera-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 500;
+}
+
+.virtual-camera-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.virtual-camera-controls label {
+    font-size: 0.75rem;
+}
+
+.virtual-camera-controls input[type="range"] {
+    width: 80px;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--btn-secondary-bg);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+
+.virtual-camera-controls input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--accent-color);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.virtual-camera-controls input[type="range"]::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: var(--accent-color);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+
+.virtual-camera-resizer {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 15px;
+    height: 15px;
+    cursor: nwse-resize;
+    z-index: 1;
+}
+
+.virtual-camera-resizer::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 0 15px 15px;
+    border-color: transparent transparent var(--text-secondary) transparent;
+    transition: border-color 0.2s;
+}
+
+.virtual-camera-resizer:hover::after {
+    border-color: transparent transparent var(--accent-color) transparent;
 }
