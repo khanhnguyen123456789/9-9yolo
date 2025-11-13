@@ -1,512 +1,630 @@
 import { render, h } from "preact";
-import { useState, useCallback, useEffect, useRef, useMemo } from "preact/hooks";
+import { useMemo, useState } from "preact/hooks";
 import htm from "htm";
-import { GoogleGenAI, Type } from "@google/genai";
 
 const html = htm.bind(h);
 
-// --- Constants ---
-const FPS = 30;
-const RULER_TICK_INTERVAL_FRAMES = 30; // Show label every 30 frames (1 second)
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 10;
-const FRAME_WIDTH_PX = 20;
+type ModuleStatus = "not-started" | "in-progress" | "completed";
 
-
-// --- Timeline Configuration ---
-const timelineTracks = [
-    { id: 'group_bone_move', label: 'Xương Di Chuyển', isGroup: true, icon: 'fa-solid fa-arrows-up-down-left-right', type: 'bone' },
-    { id: 'bone_move_head', label: 'Head', parent: 'group_bone_move', icon: 'fa-solid fa-user', type: 'bone' },
-    { id: 'bone_move_shoulder', label: 'Shoulder', parent: 'group_bone_move', icon: 'fa-solid fa-diagram-project', type: 'bone' },
-    { id: 'bone_move_elbow', label: 'Elbow', parent: 'group_bone_move', icon: 'fa-solid fa-circle', type: 'bone' },
-    { id: 'bone_move_knee', label: 'Knee', parent: 'group_bone_move', icon: 'fa-solid fa-shoe-prints', type: 'bone' },
-
-    { id: 'group_bone_rotate', label: 'Xương Xoay', isGroup: true, icon: 'fa-solid fa-rotate', type: 'bone' },
-    { id: 'bone_rotate_head', label: 'Head', parent: 'group_bone_rotate', icon: 'fa-solid fa-user', type: 'bone' },
-    { id: 'bone_rotate_shoulder', label: 'Shoulder', parent: 'group_bone_rotate', icon: 'fa-solid fa-diagram-project', type: 'bone' },
-
-    { id: 'group_bone_stretch', label: 'Xương Giãn', isGroup: true, icon: 'fa-solid fa-up-right-and-down-left-from-center', type: 'bone' },
-    { id: 'bone_stretch_head', label: 'Head', parent: 'group_bone_stretch', icon: 'fa-solid fa-user', type: 'bone' },
-    { id: 'bone_stretch_shoulder', label: 'Shoulder', parent: 'group_bone_stretch', icon: 'fa-solid fa-diagram-project', type: 'bone' },
-
-    { id: 'group_camera', label: 'Camera', isGroup: true, icon: 'fa-solid fa-camera', type: 'camera' },
-    { id: 'camera_pan', label: 'Pan', parent: 'group_camera', icon: 'fa-solid fa-arrows-left-right-to-line', type: 'camera' },
-    { id: 'camera_zoom', label: 'Zoom', parent: 'group_camera', icon: 'fa-solid fa-magnifying-glass', type: 'camera' },
-    { id: 'camera_rotate', label: 'Rotate', parent: 'group_camera', icon: 'fa-solid fa-camera-rotate', type: 'camera' },
-];
-
-const VirtualCameraOverlay = ({ camera, setCamera, appContainerRef }) => {
-    const cameraRef = useRef(null);
-    const resizerRef = useRef(null);
-    const dragInfo = useRef({ isDragging: false, isResizing: false, startX: 0, startY: 0, startW: 0, startH: 0, offsetX: 0, offsetY: 0 });
-
-    const handleMouseDown = useCallback((e) => {
-        if (!appContainerRef.current || !cameraRef.current) return;
-        const appRect = appContainerRef.current.getBoundingClientRect();
-
-        if (e.target === resizerRef.current) {
-            // FIX: Add missing offsetX and offsetY properties to match the ref's type.
-            dragInfo.current = {
-                isResizing: true,
-                isDragging: false,
-                startX: e.clientX,
-                startY: e.clientY,
-                startW: camera.width,
-                startH: camera.height,
-                offsetX: 0,
-                offsetY: 0,
-            };
-        } else {
-            // FIX: Add missing startW and startH properties to match the ref's type.
-             dragInfo.current = {
-                isDragging: true,
-                isResizing: false,
-                startX: e.clientX,
-                startY: e.clientY,
-                offsetX: e.clientX - appRect.left - camera.x,
-                offsetY: e.clientY - appRect.top - camera.y,
-                startW: 0,
-                startH: 0,
-            };
-        }
-
-        e.preventDefault();
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
-    }, [camera, appContainerRef]);
-
-    const handleMouseMove = useCallback((e) => {
-        if (!appContainerRef.current) return;
-        const appRect = appContainerRef.current.getBoundingClientRect();
-        const { isDragging, isResizing, startX, startY, startW, startH, offsetX, offsetY } = dragInfo.current;
-        
-        if (isDragging) {
-            let newX = e.clientX - appRect.left - offsetX;
-            let newY = e.clientY - appRect.top - offsetY;
-            
-            newX = Math.max(0, Math.min(newX, appRect.width - camera.width));
-            newY = Math.max(0, Math.min(newY, appRect.height - camera.height));
-
-            setCamera(c => ({ ...c, x: newX, y: newY }));
-        } else if (isResizing) {
-            let newW = startW + (e.clientX - startX);
-            let newH = startH + (e.clientY - startY);
-            
-            newW = Math.max(50, Math.min(newW, appRect.width - camera.x));
-            newH = Math.max(50, Math.min(newH, appRect.height - camera.y));
-
-            setCamera(c => ({ ...c, width: newW, height: newH }));
-        }
-    }, [camera, setCamera, appContainerRef]);
-
-    const handleMouseUp = useCallback(() => {
-        // FIX: Ensure all properties of the dragInfo ref object are reset.
-        dragInfo.current = { isDragging: false, isResizing: false, startX: 0, startY: 0, startW: 0, startH: 0, offsetX: 0, offsetY: 0 };
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
-    }, [handleMouseMove]);
-
-    return html`
-        <div 
-            ref=${cameraRef}
-            className="virtual-camera-overlay"
-            style=${{ 
-                left: `${camera.x}px`, 
-                top: `${camera.y}px`, 
-                width: `${camera.width}px`, 
-                height: `${camera.height}px`,
-                backgroundColor: `rgba(20, 20, 20, ${0.1 + (camera.opacity - 0.1) * 0.5})`, // Link background to opacity
-                transition: 'background-color 0.2s'
-            }}
-        >
-            <div className="virtual-camera-header" onMouseDown=${handleMouseDown}>
-                <div className="virtual-camera-title">
-                    <i className="fa-solid fa-camera-movie"></i> Camera Ảo
-                </div>
-                <div className="virtual-camera-controls">
-                    <label htmlFor="opacity-slider">Opacity</label>
-                    <input 
-                        id="opacity-slider"
-                        type="range" 
-                        min="0.1" 
-                        max="1" 
-                        step="0.05" 
-                        value=${camera.opacity} 
-                        onInput=${(e) => setCamera(c => ({...c, opacity: parseFloat(e.target.value)}))}
-                        onMouseDown=${e => e.stopPropagation()}
-                    />
-                </div>
-            </div>
-            <div ref=${resizerRef} className="virtual-camera-resizer" onMouseDown=${handleMouseDown}></div>
-        </div>
-    `;
+type Module = {
+    id: string;
+    name: string;
+    icon: string;
+    description: string;
+    longDescription: string;
+    highlights: string[];
+    status: ModuleStatus;
 };
 
-const TimelinePanel = ({ keyframes, currentFrame, totalFrames, onFrameChange, visibleTracks, filter, onFilterChange, zoom, pan, onZoom, onPan }) => {
-    const timelineMainRef = useRef<HTMLDivElement>(null);
-    const dragInfo = useRef({ isPanning: false, startX: 0, startPan: 0 });
+type TimelineTrack = {
+    id: string;
+    label: string;
+    description: string;
+    accent: string;
+};
 
-    const handlePan = useCallback((e: MouseEvent) => {
-        if (!dragInfo.current.isPanning) return;
-        const dx = e.clientX - dragInfo.current.startX;
-        const newPan = dragInfo.current.startPan + dx;
-        onPan(newPan);
-    }, [onPan]);
+type ShotEvent = {
+    frame: number;
+    label: string;
+    track: string;
+};
 
-    const handlePanEnd = useCallback(() => {
-        dragInfo.current.isPanning = false;
-        if(timelineMainRef.current) timelineMainRef.current.classList.remove('panning');
-        window.removeEventListener('mousemove', handlePan);
-        window.removeEventListener('mouseup', handlePanEnd);
-    }, [handlePan]);
+type Shot = {
+    id: string;
+    title: string;
+    summary: string;
+    duration: number;
+    progress: number;
+    keyframes: Record<string, number[]>;
+    events: ShotEvent[];
+    beatNotes: string[];
+    aiSuggestions: string[];
+};
 
-    const handlePanStart = useCallback((e: MouseEvent) => {
-        e.preventDefault();
-        dragInfo.current = {
-            isPanning: true,
-            startX: e.clientX,
-            startPan: pan,
-        };
-        if(timelineMainRef.current) timelineMainRef.current.classList.add('panning');
-        window.addEventListener('mousemove', handlePan);
-        window.addEventListener('mouseup', handlePanEnd);
-    }, [pan, handlePan, handlePanEnd]);
+type AssistantMessage = {
+    role: "assistant" | "user";
+    title: string;
+    content: string;
+    timestamp: string;
+};
 
-    const handleZoom = useCallback((e: WheelEvent) => {
-        e.preventDefault();
-        const timelineRect = timelineMainRef.current.getBoundingClientRect();
-        const pointerX = e.clientX - timelineRect.left;
-        const pointerFrame = (pointerX - pan) / (FRAME_WIDTH_PX * zoom);
+const navItems = [
+    { id: "overview", label: "Tổng quan" },
+    { id: "timeline", label: "Timeline" },
+    { id: "assets", label: "Tài nguyên" },
+    { id: "handoff", label: "Bàn giao" },
+];
 
-        let newZoom = zoom - e.deltaY * 0.001 * zoom;
-        newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
-        
-        const newPan = pointerX - (pointerFrame * FRAME_WIDTH_PX * newZoom);
+const modules: Module[] = [
+    {
+        id: "project-shell",
+        name: "Khung dự án",
+        icon: "fa-solid fa-diagram-project",
+        description: "Thiết lập cấu trúc tập tin Moho và các preset cần thiết.",
+        longDescription:
+            "Tạo thư mục dự án chuẩn cùng template scene, bảng màu và naming convention thống nhất để mọi thành viên có thể bắt đầu làm việc ngay.",
+        highlights: [
+            "Sinh tự động cấu trúc thư mục và file .moho ban đầu",
+            "Thêm các layer template: camera, nhân vật, ánh sáng",
+            "Gợi ý preset render theo chuẩn nhóm",
+        ],
+        status: "completed",
+    },
+    {
+        id: "story-blocking",
+        name: "Story Blocking",
+        icon: "fa-solid fa-film",
+        description: "Phác thảo chuyển động chính và kiểm tra nhịp cảnh.",
+        longDescription:
+            "Ghi lại pose chính của nhân vật, đặt timing sơ bộ cho mỗi đoạn diễn và đồng bộ nhịp với lời thoại hoặc nhạc nền.",
+        highlights: [
+            "Timeline đánh dấu các pose trọng tâm",
+            "Checklist tự động để xác nhận nhịp chuyển cảnh",
+            "Đồng bộ voice-over hoặc nhạc nền để rà timing",
+        ],
+        status: "in-progress",
+    },
+    {
+        id: "acting-pass",
+        name: "Acting Pass",
+        icon: "fa-solid fa-masks-theater",
+        description: "Chi tiết biểu cảm và nhấn nhá chuyển động.",
+        longDescription:
+            "Đi sâu vào diễn xuất: biểu cảm khuôn mặt, mắt, tay và các hành vi phụ để nhân vật trở nên sống động.",
+        highlights: [
+            "Gợi ý biểu cảm dựa trên cảm xúc câu thoại",
+            "So sánh trực quan trước/sau để kiểm tra độ mượt",
+            "Nhắc việc giữ tính liên tục giữa các shot",
+        ],
+        status: "not-started",
+    },
+    {
+        id: "camera-pass",
+        name: "Camera Pass",
+        icon: "fa-solid fa-video",
+        description: "Thiết lập chuyển động và bố cục khung hình.",
+        longDescription:
+            "Kiểm tra đường đi camera, độ sâu trường ảnh và các điểm focus để đảm bảo người xem theo dõi đúng trọng tâm.",
+        highlights: [
+            "Đề xuất góc quay thay thế dựa trên moodboard",
+            "Theo dõi độ mượt khi camera chuyển cảnh",
+            "Nhắc tối ưu thời lượng pan/zoom theo chuẩn",
+        ],
+        status: "in-progress",
+    },
+];
 
-        onZoom(newZoom);
-        onPan(newPan);
-    }, [zoom, pan, onZoom, onPan]);
+const timelineTracks: TimelineTrack[] = [
+    {
+        id: "blocking",
+        label: "Blocking",
+        description: "Pose chính và bố cục chuyển động quan trọng.",
+        accent: "var(--track-blocking)",
+    },
+    {
+        id: "acting",
+        label: "Acting",
+        description: "Biểu cảm, timing và nhịp diễn chi tiết.",
+        accent: "var(--track-acting)",
+    },
+    {
+        id: "camera",
+        label: "Camera",
+        description: "Đường đi camera, tiêu cự và nhịp chuyển cảnh.",
+        accent: "var(--track-camera)",
+    },
+    {
+        id: "effects",
+        label: "Hiệu ứng",
+        description: "Những hiệu ứng hỗ trợ và nhấn nhá ánh sáng.",
+        accent: "var(--track-effects)",
+    },
+];
 
-    useEffect(() => {
-        const mainEl = timelineMainRef.current;
-        if (mainEl) {
-            mainEl.addEventListener('wheel', handleZoom, { passive: false });
-            return () => mainEl.removeEventListener('wheel', handleZoom);
-        }
-    }, [handleZoom]);
+const workspaceShots: Shot[] = [
+    {
+        id: "S01",
+        title: "Thiết lập bối cảnh",
+        summary: "Cảnh mở đầu giới thiệu căn phòng nghiên cứu với chuyển động camera nhẹ.",
+        duration: 24,
+        progress: 0.45,
+        keyframes: {
+            blocking: [1, 8, 16, 24],
+            acting: [6, 14, 22],
+            camera: [1, 12, 24],
+            effects: [10, 18],
+        },
+        events: [
+            { frame: 1, track: "blocking", label: "Pose trung lập" },
+            { frame: 8, track: "blocking", label: "Chạm vào bàn điều khiển" },
+            { frame: 16, track: "blocking", label: "Quay sang màn hình" },
+            { frame: 6, track: "acting", label: "Biểu cảm tò mò" },
+            { frame: 14, track: "acting", label: "Ánh mắt theo dõi AI" },
+            { frame: 22, track: "acting", label: "Mỉm cười nhẹ" },
+            { frame: 12, track: "camera", label: "Camera dolly-in" },
+            { frame: 24, track: "camera", label: "Giữ khung trung" },
+            { frame: 10, track: "effects", label: "Glow màn hình" },
+            { frame: 18, track: "effects", label: "Light sweep" },
+        ],
+        beatNotes: [
+            "Giới thiệu nhân vật chính đang vận hành hệ thống AI Wan.",
+            "Nhấn mạnh thiết bị hologram nổi giữa phòng.",
+            "Tạo cảm giác kỳ diệu nhưng vẫn mang tính khoa học.",
+        ],
+        aiSuggestions: [
+            "Giữ chuyển động camera chậm để người xem cảm nhận không gian.",
+            "Tăng độ sáng của hologram vào frame 10 để làm điểm nhấn.",
+        ],
+    },
+    {
+        id: "S02",
+        title: "Giao nhiệm vụ",
+        summary: "AI Wan giao nhiệm vụ thông qua giao diện hologram nhiều lớp.",
+        duration: 32,
+        progress: 0.25,
+        keyframes: {
+            blocking: [1, 12, 20, 32],
+            acting: [8, 16, 28],
+            camera: [1, 16, 32],
+            effects: [4, 18, 26],
+        },
+        events: [
+            { frame: 12, track: "blocking", label: "Giơ tay tương tác" },
+            { frame: 20, track: "blocking", label: "Thả cử chỉ chấp nhận" },
+            { frame: 28, track: "acting", label: "Ánh mắt quyết tâm" },
+            { frame: 16, track: "camera", label: "Cut sang góc cận" },
+            { frame: 26, track: "effects", label: "UI flash" },
+        ],
+        beatNotes: [
+            "Giới thiệu màn hình hologram phân tầng.",
+            "Nhân vật tương tác trực tiếp với UI ảo.",
+            "Chuyển cảnh kết thúc bằng ánh nhìn quyết tâm.",
+        ],
+        aiSuggestions: [
+            "Thử thêm hiệu ứng parallax nhẹ ở UI để tạo chiều sâu.",
+            "Kết hợp tiếng bíp nhỏ khi hologram chuyển trạng thái.",
+        ],
+    },
+    {
+        id: "S03",
+        title: "Chuẩn bị triển khai",
+        summary: "Cảnh cận nhân vật đeo kính và chuẩn bị thiết bị trước khi xuất phát.",
+        duration: 28,
+        progress: 0.1,
+        keyframes: {
+            blocking: [4, 14, 24],
+            acting: [6, 18, 26],
+            camera: [1, 18, 28],
+            effects: [10, 22],
+        },
+        events: [
+            { frame: 14, track: "blocking", label: "Đeo kính xong" },
+            { frame: 6, track: "acting", label: "Thở sâu" },
+            { frame: 22, track: "effects", label: "Glitch nhẹ" },
+        ],
+        beatNotes: [
+            "Tập trung vào chi tiết thiết bị và ánh mắt nhân vật.",
+            "Giữ chuyển động tay mượt để thể hiện sự chuyên nghiệp.",
+        ],
+        aiSuggestions: [
+            "Có thể thêm ánh sáng phản chiếu từ kính để tăng cảm xúc.",
+        ],
+    },
+];
 
-    const canvasWidth = totalFrames * FRAME_WIDTH_PX * zoom;
+const assistantMessages: AssistantMessage[] = [
+    {
+        role: "assistant",
+        title: "AI Wan",
+        content: "Chào mừng bạn quay lại! Mình đã chuẩn bị template dự án mới với timeline rỗng để chúng ta bắt đầu từ con số 0.",
+        timestamp: "09:12",
+    },
+    {
+        role: "user",
+        title: "Bạn",
+        content: "Mình muốn dựng phần mở đầu trong hôm nay, ưu tiên blocking và camera nhé.",
+        timestamp: "09:15",
+    },
+    {
+        role: "assistant",
+        title: "AI Wan",
+        content: "Đã ghi chú. Mình sẽ gợi ý keyframe cho shot S01 và chuẩn bị checklist kiểm tra nhịp.",
+        timestamp: "09:16",
+    },
+];
 
-    const rulerTicks = useMemo(() => {
-        const ticks = [];
-        for (let frame = 0; frame <= totalFrames; frame += RULER_TICK_INTERVAL_FRAMES) {
-            ticks.push(frame);
-        }
-        return ticks;
-    }, [totalFrames]);
-    
-    return html`
-        <div class="panel timeline-panel">
-            <div class="panel-header">
-                <div class="timeline-controls-left">
-                     <button class="small icon-btn"><i class="fa-solid fa-backward-step"></i></button>
-                    <button class="small icon-btn"><i class="fa-solid fa-play"></i></button>
-                    <button class="small icon-btn"><i class="fa-solid fa-forward-step"></i></button>
-                </div>
-                <div class="timeline-filter-group">
-                    <button onClick=${() => onFilterChange('all')} className=${filter === 'all' ? 'active' : ''}>Tất cả</button>
-                    <button onClick=${() => onFilterChange('bone')} className=${filter === 'bone' ? 'active' : ''}>Xương</button>
-                    <button onClick=${() => onFilterChange('camera')} className=${filter === 'camera' ? 'active' : ''}>Camera</button>
-                </div>
-                <div class="timeline-controls-right">
-                    <span>${currentFrame} / ${totalFrames}</span>
-                </div>
-            </div>
-            <div class="timeline-content">
-                <div class="timeline-sidebar">
-                    ${visibleTracks.map(track => html`
-                        <div key=${track.id} className="timeline-track-label ${track.isGroup ? 'group-label' : ''}" style=${{ paddingLeft: track.parent ? '2rem' : '1rem' }}>
-                           <i className=${track.icon}></i> ${track.label}
-                        </div>
-                    `)}
-                </div>
-                <div ref=${timelineMainRef} class="timeline-main" onMouseDown=${handlePanStart}>
-                   <div class="timeline-canvas" style=${{ width: `${canvasWidth}px`, transform: `translateX(${pan}px)` }}>
-                       <div class="timeline-ruler">
-                           ${rulerTicks.map(frame => html`
-                               <div key=${frame} class="ruler-tick" data-frame=${frame} style=${{ left: `${frame * FRAME_WIDTH_PX * zoom}px` }}></div>
-                           `)}
-                       </div>
-                       <div class="tracks-area">
-                           ${visibleTracks.map(track => html`
-                               <div key=${track.id} className="timeline-track ${track.isGroup ? 'group-track' : ''}">
-                                   ${!track.isGroup && keyframes[track.id]?.map(frame => html`
-                                       <div 
-                                         key=${`${track.id}-${frame}`}
-                                         className="keyframe"
-                                         style=${{ left: `${frame * FRAME_WIDTH_PX * zoom}px` }}
-                                         onClick=${(e) => { e.stopPropagation(); onFrameChange(frame); }}
-                                       ></div>
-                                   `)}
-                               </div>
-                           `)}
-                       </div>
-                       <div class="playhead" style=${{ left: `${currentFrame * FRAME_WIDTH_PX * zoom}px` }}></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-}
+const quickActions = [
+    {
+        icon: "fa-solid fa-wand-magic-sparkles",
+        label: "Tạo scene Moho mới",
+        description: "Sinh file .moho với layer camera, nhân vật và ánh sáng chuẩn.",
+    },
+    {
+        icon: "fa-solid fa-clapperboard",
+        label: "Xuất bảng phân cảnh",
+        description: "Kết hợp shot list với thumbnail để gửi đạo diễn duyệt.",
+    },
+    {
+        icon: "fa-solid fa-microphone-lines",
+        label: "Đồng bộ thoại",
+        description: "Gắn track thoại làm tham chiếu timing cho từng shot.",
+    },
+];
+
+const statusLabel: Record<ModuleStatus, string> = {
+    "not-started": "Chưa bắt đầu",
+    "in-progress": "Đang thực hiện",
+    completed: "Hoàn thành",
+};
 
 const App = () => {
-    const [keyframes, setKeyframes] = useState({});
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const [currentFrame, setCurrentFrame] = useState(0);
-    const [totalFrames, setTotalFrames] = useState(300); // Default: 10 seconds at 30fps
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [activeTab, setActiveTab] = useState('mapping');
-    const [timelineFilter, setTimelineFilter] = useState('all');
-    
-    // Timeline view state
-    const [timelineZoom, setTimelineZoom] = useState(1);
-    const [timelinePan, setTimelinePan] = useState(0);
-    
-    // Video state
-    const [videoSrc, setVideoSrc] = useState<string | null>(null);
-    const [videoError, setVideoError] = useState<string | null>(null);
-    
-    // Virtual Camera State
-    const [camera, setCamera] = useState({ x: 50, y: 50, width: 300, height: 200, opacity: 0.8 });
+    const [activeNav, setActiveNav] = useState(navItems[0].id);
+    const [selectedModuleId, setSelectedModuleId] = useState(modules[0].id);
+    const [selectedShotIndex, setSelectedShotIndex] = useState(0);
+    const [activeTrackId, setActiveTrackId] = useState(timelineTracks[0].id);
 
-    // REFS
-    const playheadIntervalRef = useRef<number | null>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const appContainerRef = useRef<HTMLDivElement>(null);
+    const selectedModule = useMemo(
+        () => modules.find((module) => module.id === selectedModuleId) ?? modules[0],
+        [selectedModuleId]
+    );
 
+    const selectedShot = useMemo(
+        () => workspaceShots[selectedShotIndex] ?? workspaceShots[0],
+        [selectedShotIndex]
+    );
 
-    // MEMOIZED VALUES
-    const visibleTracks = useMemo(() => {
-        if (timelineFilter === 'all') return timelineTracks;
-        
-        const filtered = timelineTracks.filter(track => {
-             // Include the track if its type matches the filter
-            if (track.type === timelineFilter) return true;
-            // Include a group if any of its children match the filter
-            if (track.isGroup) {
-                return timelineTracks.some(child => child.parent === track.id && child.type === timelineFilter);
-            }
-            return false;
-        });
+    const activeTrack = useMemo(
+        () => timelineTracks.find((track) => track.id === activeTrackId) ?? timelineTracks[0],
+        [activeTrackId]
+    );
 
-        // Ensure parent groups are included for visible children
-        const finalTracks = [];
-        const includedGroups = new Set();
-        filtered.forEach(track => {
-            if(track.parent && !includedGroups.has(track.parent)){
-                const group = timelineTracks.find(t => t.id === track.parent);
-                if(group){
-                    finalTracks.push(group);
-                    includedGroups.add(group.id);
-                }
-            }
-            if(!finalTracks.some(t => t.id === track.id)){
-               finalTracks.push(track);
-            }
-        });
+    const keyframeSet = useMemo(() => {
+        return new Set(selectedShot.keyframes[activeTrack.id] ?? []);
+    }, [selectedShot, activeTrack]);
 
-        return finalTracks;
-
-    }, [timelineFilter]);
-
-
-    // HANDLERS
-    const handleFileChange = useCallback((event: Event) => {
-        const target = event.target as HTMLInputElement;
-        const file = target.files?.[0];
-        if (!file) return;
-
-        // Reset previous state and revoke old URL if it exists
-        if (videoSrc) {
-            URL.revokeObjectURL(videoSrc);
-        }
-        setVideoSrc(null);
-        setVideoError(null);
-
-        const videoElement = document.createElement('video');
-        const url = URL.createObjectURL(file);
-
-        videoElement.addEventListener('loadedmetadata', () => {
-            if (videoElement.duration > 60) {
-                setVideoError('Lỗi: Video phải từ 60 giây trở xuống.');
-                setVideoSrc(null);
-                setTotalFrames(300); // Reset to default
-                URL.revokeObjectURL(url); // Clean up immediately since it's invalid
-            } else {
-                setVideoError(null);
-                setVideoSrc(url); // URL is now in use by the component
-                setTotalFrames(Math.floor(videoElement.duration * FPS));
-                setCurrentFrame(0); // Reset playhead
-            }
-        });
-
-        videoElement.addEventListener('error', () => {
-            setVideoError('Lỗi: Không thể tải tệp video.');
-            setVideoSrc(null);
-            URL.revokeObjectURL(url); // Clean up on error
-        });
-
-        videoElement.src = url;
-    }, [videoSrc]);
-
-    const handleAnalyze = useCallback(async () => {
-        if (!videoSrc) return;
-        setIsAnalyzing(true);
-        setProgress(0);
-        
-        // Mock analysis
-        const analysisDuration = 2000;
-        const interval = setInterval(() => {
-            setProgress(p => {
-                const newProgress = p + (100 / (analysisDuration / 100));
-                if (newProgress >= 100) {
-                    clearInterval(interval);
-                    setIsAnalyzing(false);
-                    // Mock keyframe generation
-                    const newKeyframes = {};
-                    timelineTracks.forEach(track => {
-                        if (!track.isGroup) {
-                            newKeyframes[track.id] = [];
-                            for (let i = 0; i < 5; i++) {
-                                newKeyframes[track.id].push(Math.floor(Math.random() * totalFrames));
-                            }
-                        }
-                    });
-                    setKeyframes(newKeyframes);
-                    return 100;
-                }
-                return newProgress;
+    const frameEvents = useMemo(() => {
+        const map = new Map<number, ShotEvent>();
+        selectedShot.events
+            .filter((event) => event.track === activeTrack.id)
+            .forEach((event) => {
+                map.set(event.frame, event);
             });
-        }, 100);
-    }, [videoSrc, totalFrames]);
+        return map;
+    }, [selectedShot, activeTrack]);
 
-    // Cleanup for video object URL when component unmounts or videoSrc changes
-    useEffect(() => {
-      return () => {
-        if (videoSrc) {
-          URL.revokeObjectURL(videoSrc);
-        }
-      };
-    }, [videoSrc]);
-    
+    const frames = useMemo(() => {
+        return Array.from({ length: selectedShot.duration }, (_, index) => {
+            const frameNumber = index + 1;
+            return {
+                frameNumber,
+                hasKeyframe: keyframeSet.has(frameNumber),
+                event: frameEvents.get(frameNumber) ?? null,
+            };
+        });
+    }, [selectedShot, keyframeSet, frameEvents]);
+
+    const completionRate = useMemo(() => {
+        const sum = workspaceShots.reduce((acc, shot) => acc + shot.progress, 0);
+        return Math.round((sum / workspaceShots.length) * 100);
+    }, []);
 
     return html`
-        <div ref=${appContainerRef} className="app-container">
-            <header className="app-header">
-                <h1 className="app-header-title">YOLOv8 to Moho Keyframe Assistant</h1>
+        <div className="app-shell">
+            <header className="topbar">
+                <div className="topbar-left">
+                    <div className="brand">
+                        <div className="brand-icon"><i className="fa-solid fa-cube"></i></div>
+                        <div>
+                            <div className="brand-name">Moho AI Wan</div>
+                            <div className="brand-tagline">Khởi tạo pipeline hoạt hình từ con số 0</div>
+                        </div>
+                    </div>
+                    <nav className="main-nav">
+                        ${navItems.map(
+                            (item) => html`
+                                <button
+                                    key=${item.id}
+                                    className=${`nav-item ${item.id === activeNav ? "is-active" : ""}`}
+                                    onClick=${() => setActiveNav(item.id)}
+                                >
+                                    ${item.label}
+                                </button>
+                            `
+                        )}
+                    </nav>
+                </div>
+                <div className="topbar-right">
+                    <div className="status-pill">
+                        <span className="status-indicator"></span>
+                        <span>Bản nháp 0.1</span>
+                    </div>
+                    <button className="primary-button small">
+                        <i className="fa-regular fa-floppy-disk"></i>
+                        Lưu snapshot
+                    </button>
+                </div>
             </header>
 
-            <main className="main-content">
-                <div className="panels-container middle-panel-group">
-                    
-                    <div className="panel video-input-panel">
-                        <div className="panel-header">
-                            <h2 className="panel-title">Nguồn Video</h2>
-                        </div>
-                        <div className="video-placeholder">
-                             ${videoSrc ? html`
-                                <video src=${videoSrc} controls className="video-preview" />
-                            ` : html`
-                                <>
-                                    <i className="fa-solid fa-video"></i>
-                                    <span>Chọn video (tối đa 60s)</span>
-                                </>
-                            `}
-                        </div>
-                        ${videoError && html`<div class="video-error-message">${videoError}</div>`}
-                        <div className="video-controls">
-                            <input
-                                type="file"
-                                ref=${fileInputRef}
-                                onChange=${handleFileChange}
-                                accept="video/*"
-                                style=${{ display: 'none' }}
-                                id="video-upload"
-                            />
-                            <button className="secondary" onClick=${() => fileInputRef.current?.click()}>
-                                <i className="fa-solid fa-folder-open"></i>
-                                Chọn Video
+            <main className="main-area">
+                <section className="hero-section">
+                    <div className="hero-content">
+                        <span className="hero-badge">Sprint hiện tại · Block 01</span>
+                        <h1>Bắt đầu hành trình Moho AI Wan của bạn</h1>
+                        <p>
+                            Thiết lập nền tảng dự án hoạt hình với timeline, shot list và trợ lý AI Wan đồng hành. Hãy bắt đầu bằng
+                            việc hoàn thiện khung dự án và xác định các shot quan trọng.
+                        </p>
+                        <div className="hero-actions">
+                            <button className="primary-button">
+                                <i className="fa-solid fa-play"></i>
+                                Khởi tạo dự án mới
+                            </button>
+                            <button className="ghost-button">
+                                <i className="fa-regular fa-compass"></i>
+                                Xem hướng dẫn 5 bước
                             </button>
                         </div>
-                    </div>
-                    
-                    <div className="panel retargeting-studio-panel">
-                         <div className="panel-header">
-                            <h2 className="panel-title">Retargeting Studio</h2>
-                        </div>
-                        <h3 className="panel-subtitle">Keypoint Visualizer</h3>
-                         <div className="visualizer-placeholder">
-                            <!-- Mock nodes for visualization -->
-                            <div class="node-mock" style="top: 20%; left: 50%;"></div>
-                            <div class="node-mock" style="top: 40%; left: 40%;"></div>
-                            <div class="node-mock" style="top: 40%; left: 60%;"></div>
-                            <div class="node-mock" style="top: 60%; left: 30%;"></div>
-                            <div class="node-mock" style="top: 60%; left: 70%;"></div>
-                        </div>
-                    </div>
-                    
-                    <div className="panel right-control-panel">
-                        <div className="tabs-nav">
-                           <button className=${`tab-button ${activeTab === 'mapping' ? 'active' : ''}`} onClick=${() => setActiveTab('mapping')}>Bone Mapping</button>
-                           <button className=${`tab-button ${activeTab === 'settings' ? 'active' : ''}`} onClick=${() => setActiveTab('settings')}>Cài đặt</button>
-                        </div>
-                        <div className="main-actions-group">
-                            <button
-                                className="primary-action"
-                                onClick=${handleAnalyze}
-                                disabled=${!videoSrc || isAnalyzing}
-                            >
-                                ${isAnalyzing ? 'Đang xử lý...' : html`
-                                    <>
-                                        <i className="fa-solid fa-wand-magic-sparkles"></i>
-                                        Phân tích & Tạo Keyframe
-                                    </>
-                                `}
-                            </button>
-                            <div className="progress-bar-container">
-                                <div className="progress-bar" style=${{ width: `${progress}%` }}></div>
+                        <div className="hero-metrics">
+                            <div className="metric-card">
+                                <span className="metric-label">Storyboard đã duyệt</span>
+                                <span className="metric-value">${completionRate}%</span>
+                                <span className="metric-footnote">Tiến độ trung bình các shot</span>
+                            </div>
+                            <div className="metric-card">
+                                <span className="metric-label">Shot cần blocking</span>
+                                <span className="metric-value">${workspaceShots.length}</span>
+                                <span className="metric-footnote">Sẵn sàng cho vòng dựng đầu</span>
+                            </div>
+                            <div className="metric-card">
+                                <span className="metric-label">Preset Moho</span>
+                                <span className="metric-value">05</span>
+                                <span className="metric-footnote">Đã cấu hình tự động</span>
                             </div>
                         </div>
                     </div>
-                </div>
+                    <div className="hero-preview">
+                        <div className="hero-card">
+                            <h3>Checklist khởi động</h3>
+                            <ul>
+                                <li><i className="fa-solid fa-check"></i> Tạo project shell rỗng</li>
+                                <li><i className="fa-solid fa-check"></i> Thiết lập timeline 24fps</li>
+                                <li><i className="fa-solid fa-circle"></i> Đồng bộ thư viện asset</li>
+                                <li><i className="fa-solid fa-circle"></i> Chuẩn bị ghi chú đạo diễn</li>
+                            </ul>
+                        </div>
+                        <div className="hero-card">
+                            <h3>Nhịp làm việc đề xuất</h3>
+                            <ol>
+                                <li>Blocking từng shot</li>
+                                <li>Rà camera pass</li>
+                                <li>Chi tiết acting</li>
+                                <li>Hoàn thiện hiệu ứng</li>
+                            </ol>
+                            <p className="hero-note">AI Wan sẽ nhắc tự động khi mỗi giai đoạn hoàn thành.</p>
+                        </div>
+                    </div>
+                </section>
 
-                <div className="timeline-resizer"></div>
-                <div className="timeline-panel-wrapper" style=${{ height: '350px' }}>
-                     <${TimelinePanel} 
-                        keyframes=${keyframes}
-                        currentFrame=${currentFrame}
-                        totalFrames=${totalFrames}
-                        onFrameChange=${setCurrentFrame}
-                        visibleTracks=${visibleTracks}
-                        filter=${timelineFilter}
-                        onFilterChange=${setTimelineFilter}
-                        zoom=${timelineZoom}
-                        pan=${timelinePan}
-                        onZoom=${setTimelineZoom}
-                        onPan=${setTimelinePan}
-                     />
-                </div>
+                <section className="workspace-section">
+                    <div className="workspace-grid">
+                        <div className="panel module-panel">
+                            <div className="panel-header">
+                                <div>
+                                    <h2>Mô-đun pipeline</h2>
+                                    <p>Chọn hạng mục để xem hướng dẫn chi tiết và checklist.</p>
+                                </div>
+                            </div>
+                            <div className="module-list">
+                                ${modules.map(
+                                    (module) => html`
+                                        <button
+                                            key=${module.id}
+                                            className=${`module-item ${module.id === selectedModuleId ? "is-active" : ""}`}
+                                            onClick=${() => setSelectedModuleId(module.id)}
+                                        >
+                                            <span className="module-icon">
+                                                <i className=${module.icon}></i>
+                                            </span>
+                                            <div className="module-body">
+                                                <div className="module-title">${module.name}</div>
+                                                <p className="module-description">${module.description}</p>
+                                                <span className=${`module-status status-${module.status}`}>
+                                                    ${statusLabel[module.status]}
+                                                </span>
+                                            </div>
+                                        </button>
+                                    `
+                                )}
+                            </div>
+                            <div className="module-detail">
+                                <h3>${selectedModule.name}</h3>
+                                <p>${selectedModule.longDescription}</p>
+                                <ul>
+                                    ${selectedModule.highlights.map(
+                                        (item) => html`<li><i className="fa-regular fa-circle-check"></i>${item}</li>`
+                                    )}
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div className="panel timeline-panel">
+                            <div className="panel-header">
+                                <div>
+                                    <h2>Timeline dựng cảnh</h2>
+                                    <p>Chọn shot và track để xem đề xuất keyframe từ AI Wan.</p>
+                                </div>
+                                <button className="ghost-button small">
+                                    <i className="fa-solid fa-arrow-trend-up"></i>
+                                    So sánh phiên bản
+                                </button>
+                            </div>
+
+                            <div className="shot-list">
+                                ${workspaceShots.map(
+                                    (shot, index) => html`
+                                        <button
+                                            key=${shot.id}
+                                            className=${`shot-card ${index === selectedShotIndex ? "is-active" : ""}`}
+                                            onClick=${() => setSelectedShotIndex(index)}
+                                        >
+                                            <div className="shot-card-top">
+                                                <span className="shot-id">${shot.id}</span>
+                                                <span className="shot-title">${shot.title}</span>
+                                            </div>
+                                            <div className="shot-progress">
+                                                <div
+                                                    className="shot-progress-bar"
+                                                    style=${{ width: `${Math.round(shot.progress * 100)}%` }}
+                                                ></div>
+                                            </div>
+                                            <div className="shot-meta">
+                                                <span><i className="fa-regular fa-clock"></i>${shot.duration}f</span>
+                                                <span><i className="fa-solid fa-bullseye"></i>${Math.round(shot.progress * 100)}%</span>
+                                            </div>
+                                        </button>
+                                    `
+                                )}
+                            </div>
+
+                            <div className="track-toggle">
+                                ${timelineTracks.map(
+                                    (track) => html`
+                                        <button
+                                            key=${track.id}
+                                            className=${`track-button ${track.id === activeTrackId ? "is-active" : ""}`}
+                                            onClick=${() => setActiveTrackId(track.id)}
+                                        >
+                                            <span className="track-swatch" style=${{ background: track.accent }}></span>
+                                            ${track.label}
+                                        </button>
+                                    `
+                                )}
+                            </div>
+
+                            <div className="track-description">${activeTrack.description}</div>
+
+                            <div className="timeline-frames">
+                                ${frames.map(
+                                    (frame) => html`
+                                        <div
+                                            key=${frame.frameNumber}
+                                            className=${`timeline-frame ${frame.hasKeyframe ? "has-keyframe" : ""}`}
+                                        >
+                                            <span className="frame-number">F${frame.frameNumber}</span>
+                                            ${frame.event
+                                                ? html`<span className="frame-event">
+                                                      <i className="fa-solid fa-sparkles"></i>
+                                                      ${frame.event.label}
+                                                  </span>`
+                                                : null}
+                                        </div>
+                                    `
+                                )}
+                            </div>
+
+                            <div className="shot-notes">
+                                <div>
+                                    <h4>Beat chính</h4>
+                                    <ul>
+                                        ${selectedShot.beatNotes.map((note, index) => html`<li key=${index}>${note}</li>`)}
+                                    </ul>
+                                </div>
+                                <div>
+                                    <h4>Gợi ý từ AI Wan</h4>
+                                    <ul>
+                                        ${selectedShot.aiSuggestions.map((note, index) => html`<li key=${index}>${note}</li>`)}
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="panel assistant-panel">
+                            <div className="panel-header">
+                                <div>
+                                    <h2>Trợ lý AI Wan</h2>
+                                    <p>Theo dõi hội thoại và thực hiện hành động nhanh.</p>
+                                </div>
+                                <button className="ghost-button small">
+                                    <i className="fa-solid fa-plus"></i>
+                                    Giao nhiệm vụ
+                                </button>
+                            </div>
+
+                            <div className="assistant-conversation">
+                                ${assistantMessages.map(
+                                    (message) => html`
+                                        <div className=${`assistant-message ${message.role}`} key=${message.timestamp}>
+                                            <div className="message-header">
+                                                <span className="message-author">${message.title}</span>
+                                                <span className="message-time">${message.timestamp}</span>
+                                            </div>
+                                            <p>${message.content}</p>
+                                        </div>
+                                    `
+                                )}
+                            </div>
+
+                            <div className="quick-actions">
+                                <h3>Hành động nhanh</h3>
+                                <ul>
+                                    ${quickActions.map(
+                                        (action) => html`
+                                            <li key=${action.label}>
+                                                <button className="quick-action-button">
+                                                    <i className=${action.icon}></i>
+                                                    <span>${action.label}</span>
+                                                </button>
+                                                <p>${action.description}</p>
+                                            </li>
+                                        `
+                                    )}
+                                </ul>
+                            </div>
+
+                            <div className="assistant-footer">
+                                <button className="primary-button full">
+                                    <i className="fa-solid fa-message"></i>
+                                    Bắt đầu phiên brainstorm
+                                </button>
+                                <p className="assistant-note">
+                                    AI Wan sẽ lưu lại toàn bộ lịch sử để bạn xem lại bất cứ lúc nào.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </main>
-            
-            <${VirtualCameraOverlay} camera=${camera} setCamera=${setCamera} appContainerRef=${appContainerRef} />
 
-            <div className="status-bar">
-                <span>Ready</span>
-                <span>Frames: ${totalFrames}</span>
-            </div>
+            <footer className="app-footer">
+                <span>© 2025 Moho AI Wan · Pipeline hoạt hình thông minh</span>
+                <span className="footer-links">
+                    <a href="#">Tài liệu</a>
+                    <a href="#">Nhật ký thay đổi</a>
+                    <a href="#">Hỗ trợ</a>
+                </span>
+            </footer>
         </div>
     `;
 };
 
-render(html`<${App} />`, document.getElementById('root'));
+render(html`<${App} />`, document.getElementById("root"));
